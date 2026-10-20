@@ -229,17 +229,28 @@ struct ShellVertexSpec {
   std::vector<BarrelPart> centralBarrel; ///< Barrel layers that end in z before the first disk
   BarrelPart shellBarrel;                ///< Barrel layer(s) enclosing the disks
   AxisDefinition barrelAxes;             ///< The axes directions for the barrel sensors
+  std::string endcapContainer;           ///< Name of the DetElement containing both endcap sides
+  std::string endcapPosSide;             ///< Name of the positive side DetElement inside @c endcapContainer
+  std::string endcapNegSide;             ///< Name of the negative side DetElement inside @c endcapContainer
+  std::regex endcapFilter;               ///< The layer pattern to filter the endcap layers of one side
+  AxisDefinition endcapAxes;             ///< The axes directions for the endcap sensors
 };
 
 /// The IDEA/ALLEGRO vertex detector (VertexComplete_o1_v04 in k4geo). Its
 /// barrel is split into VertexInnerBarrel (r < 40 mm) and VertexOuterBarrel,
 /// whose first layer still ends before the first disk (|z| < 155 mm) while
-/// the second one overlaps it in z at r = 316 mm.
+/// the second one overlaps it in z at r = 316 mm. The disk layers are named
+/// the same on both sides, so the sides are told apart by their DetElement.
 const auto IDEAVertexSpec = ShellVertexSpec{
     .centralBarrel = {{"VertexInnerBarrel", std::regex{"layer_\\d+_\\d+"}},
                       {"VertexOuterBarrel", std::regex{"layer_3_1"}}},
     .shellBarrel = {"VertexOuterBarrel", std::regex{"layer_4_1"}},
     .barrelAxes = "XYZ",
+    .endcapContainer = "VertexDisks",
+    .endcapPosSide = "side1",
+    .endcapNegSide = "side-1",
+    .endcapFilter = std::regex{"layer\\d+"},
+    .endcapAxes = "XYZ",
 };
 
 const auto UngroupedNestedInnerTrackerSpec = NestedInnerTrackerSpec{
@@ -526,6 +537,38 @@ void addGroupedEndcapSide(ActsPlugins::DD4hep::BlueprintBuilder& builder, Acts::
       .endcap()
       .setSensorAxes(std::move(axes))
       .setContainer(container)
+      .setLayerFilter(filter)
+      .setEnvelope(envelope)
+      .setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First)
+      .onLayer(std::move(onLayer))
+      .addTo(parent);
+}
+
+/// Add one endcap side to @p parent from the layer DetElements below the side
+/// DetElement @p side of @p container.
+///
+/// Use this instead of @c addGroupedEndcapSide when the layers of both sides
+/// carry the same names, so that a layer filter alone cannot tell them apart.
+///
+/// @param builder   Blueprint builder driving the construction
+/// @param parent    Node to attach the endcap side to
+/// @param container Name of the DetElement that contains both sides
+/// @param side      Name of the side DetElement inside @p container
+/// @param filter    Regex selecting the layer DetElements of this side
+/// @param axes      Sensor coordinate axes for this endcap side
+/// @param envelope  Extent envelope applied to the resulting volume
+/// @param onLayer   Optional per-layer customization, e.g. from @c designateLayers
+void addGroupedEndcapSideFromSideElement(ActsPlugins::DD4hep::BlueprintBuilder& builder, Acts::BlueprintNode& parent,
+                                         const std::string& container, const std::string& side,
+                                         const std::regex& filter, AxisDefinition axes,
+                                         const Acts::ExtentEnvelope& envelope, LayerCustomizer onLayer = {}) {
+  const auto containerElem = builder.findDetElementByName(container);
+  const auto sideElem = builder.findDetElementByName(containerElem.value(), side);
+  builder.layers()
+      .endcap()
+      .setSensorAxes(std::move(axes))
+      .setContainer(sideElem.value())
+      .setContainerName(fmt::format("{}|{}", container, side))
       .setLayerFilter(filter)
       .setEnvelope(envelope)
       .setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First)
@@ -843,7 +886,8 @@ makeNestedInnerTracker(ActsPlugins::DD4hep::BlueprintBuilder& builder,
 /// Make a vertex detector whose outermost barrel layer encloses the disks.
 ///
 /// The central barrel layers, possibly taken from several DetElements, are
-/// stacked along r, and the shell layer is stacked radially around them.
+/// stacked along r and placed between the two endcap sides along z. The shell
+/// layer is then stacked radially around that z-stack.
 ///
 /// @param builder The Blueprint builder that drives the construction
 /// @param spec    Configuration spec
@@ -856,11 +900,18 @@ std::shared_ptr<CylinderContainerBlueprintNode> makeShellVertex(ActsPlugins::DD4
   auto vertex = std::make_shared<CylinderContainerBlueprintNode>(name, AxisR);
   vertex->setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
 
-  vertex->addCylinderContainer(name + "CentralBarrel", AxisR, [&](auto& central) {
+  vertex->addCylinderContainer(name + "Central", AxisZ, [&](auto& central) {
     central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-    for (const auto& part : spec.centralBarrel) {
-      central.addChild(makeGroupedBarrel(builder, part.container, part.filter, spec.barrelAxes, kBarrelEnvelope));
-    }
+    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapNegSide, spec.endcapFilter,
+                                        spec.endcapAxes, kVertexEndcapEnvelope);
+    central.addCylinderContainer(name + "CentralBarrel", AxisR, [&](auto& barrel) {
+      barrel.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+      for (const auto& part : spec.centralBarrel) {
+        barrel.addChild(makeGroupedBarrel(builder, part.container, part.filter, spec.barrelAxes, kBarrelEnvelope));
+      }
+    });
+    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapPosSide, spec.endcapFilter,
+                                        spec.endcapAxes, kVertexEndcapEnvelope);
   });
 
   vertex->addChild(makeGroupedBarrel(builder, spec.shellBarrel.container, spec.shellBarrel.filter, spec.barrelAxes,
