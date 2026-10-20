@@ -1169,6 +1169,23 @@ namespace CLD_o2_v07 {
     Blueprints::addCaloEndcap(world, calo, /*positive=*/true);
   }
 } // namespace CLD_o2_v07
+
+namespace IDEA_o1_v04 {
+  void populateBlueprint(const std::string& detName, Acts::Blueprint& root,
+                         [[maybe_unused]] ActsPlugins::DD4hep::BlueprintBuilder& builder,
+                         [[maybe_unused]] const IActsGeoSvc::CaloFaceSurfaces& calo) {
+    // Build the tracker detectors as radial children of the supplied
+    // container.
+    auto buildTrackers = [&](ContainerBlueprintNode& outer) { Blueprints::addCylindricalBeampipe(outer); };
+
+    // The calo faces are not usable for IDEA yet: DRcalo is a single
+    // DetElement flagged both BARREL and ENDCAP, without a polygon symmetry
+    // and with its own extent[] layout, so the barrel face is skipped and the
+    // endcap disc ends up at the wrong place. Keep the purely radial layout.
+    auto& outer = root.addCylinderContainer(detName, AxisR);
+    buildTrackers(outer);
+  }
+} // namespace IDEA_o1_v04
 } // namespace FCCee
 
 namespace LUXE {

@@ -143,6 +143,7 @@ add_geometry_load_test($ENV{k4geo_DIR}/FCCee/ILD_FCCee/compact/ILD_FCCee_v01/ILD
 add_geometry_load_test($ENV{k4geo_DIR}/FCCee/ILD_FCCee/compact/ILD_FCCee_v02/ILD_FCCee_v02.xml)
 add_geometry_load_test($ENV{k4geo_DIR}/FCCee/CLD/compact/CLD_o2_v07/CLD_o2_v07.xml)
 add_geometry_load_test($ENV{k4geo_DIR}/FCCee/CLD/compact/CLD_o2_v08/CLD_o2_v08.xml)
+add_geometry_load_test($ENV{k4geo_DIR}/FCCee/IDEA/compact/IDEA_o1_v04/IDEA_o1_v04.xml)
 
 # The LUXE geometry lives in luxegeo, which is only present in the LUXE software
 # stack (ghcr.io/luxesoftware/luxe-sw, see luxe-ci.yml). Guard on luxegeo_DIR so

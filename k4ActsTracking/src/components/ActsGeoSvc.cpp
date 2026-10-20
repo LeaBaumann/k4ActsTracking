@@ -154,6 +154,7 @@ ActsGeoSvc::ActsGeoSvc(const std::string& name, ISvcLocator* svcLoc) : base_clas
                                 {"ILD_FCCee_v02", FCCee::ILD_FCCee_v02::populateBlueprint},
                                 {"CLD_o2_v07", FCCee::CLD_o2_v07::populateBlueprint},
                                 {"CLD_o2_v08", FCCee::CLD_o2_v07::populateBlueprint},
+                                {"IDEA_o1_v04", FCCee::IDEA_o1_v04::populateBlueprint},
                                 {"LUXE_v0", LUXE::LUXE_v0::populateBlueprint}};
 }
 
