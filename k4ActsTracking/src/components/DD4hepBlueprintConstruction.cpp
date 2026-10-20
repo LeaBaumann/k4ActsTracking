@@ -217,6 +217,31 @@ struct NestedInnerTrackerSpec {
   Layout layout = Layout::Grouped;
 };
 
+/// A simple struct to hold configuration to build a vertex detector whose
+/// outermost barrel layer reaches the endcap disks in z, but sits radially
+/// outside of them, so that it has to enclose the disks as a separate shell.
+struct ShellVertexSpec {
+  /// Barrel layers selected by @c filter inside the DetElement @c container
+  struct BarrelPart {
+    std::string container; ///< Name of the DetElement containing the barrel layers
+    std::regex filter;     ///< The layer pattern to filter the barrel layers
+  };
+  std::vector<BarrelPart> centralBarrel; ///< Barrel layers that end in z before the first disk
+  BarrelPart shellBarrel;                ///< Barrel layer(s) enclosing the disks
+  AxisDefinition barrelAxes;             ///< The axes directions for the barrel sensors
+};
+
+/// The IDEA/ALLEGRO vertex detector (VertexComplete_o1_v04 in k4geo). Its
+/// barrel is split into VertexInnerBarrel (r < 40 mm) and VertexOuterBarrel,
+/// whose first layer still ends before the first disk (|z| < 155 mm) while
+/// the second one overlaps it in z at r = 316 mm.
+const auto IDEAVertexSpec = ShellVertexSpec{
+    .centralBarrel = {{"VertexInnerBarrel", std::regex{"layer_\\d+_\\d+"}},
+                      {"VertexOuterBarrel", std::regex{"layer_3_1"}}},
+    .shellBarrel = {"VertexOuterBarrel", std::regex{"layer_4_1"}},
+    .barrelAxes = "XYZ",
+};
+
 const auto UngroupedNestedInnerTrackerSpec = NestedInnerTrackerSpec{
     .barrelContainer = "InnerTrackerBarrel",
     .barrelAxes = "XYZ",
@@ -815,6 +840,34 @@ makeNestedInnerTracker(ActsPlugins::DD4hep::BlueprintBuilder& builder,
   return innerTracker;
 }
 
+/// Make a vertex detector whose outermost barrel layer encloses the disks.
+///
+/// The central barrel layers, possibly taken from several DetElements, are
+/// stacked along r, and the shell layer is stacked radially around them.
+///
+/// @param builder The Blueprint builder that drives the construction
+/// @param spec    Configuration spec
+/// @param name    Name of the resulting container node
+///
+/// @returns The vertex blueprint node
+std::shared_ptr<CylinderContainerBlueprintNode> makeShellVertex(ActsPlugins::DD4hep::BlueprintBuilder& builder,
+                                                                const ShellVertexSpec& spec,
+                                                                const std::string& name = "Vertex") {
+  auto vertex = std::make_shared<CylinderContainerBlueprintNode>(name, AxisR);
+  vertex->setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+
+  vertex->addCylinderContainer(name + "CentralBarrel", AxisR, [&](auto& central) {
+    central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+    for (const auto& part : spec.centralBarrel) {
+      central.addChild(makeGroupedBarrel(builder, part.container, part.filter, spec.barrelAxes, kBarrelEnvelope));
+    }
+  });
+
+  vertex->addChild(makeGroupedBarrel(builder, spec.shellBarrel.container, spec.shellBarrel.filter, spec.barrelAxes,
+                                     kBarrelEnvelope));
+  return vertex;
+}
+
 /// Navigation policy factory for the passive calo volumes. Each calo volume
 /// holds only a handful of explicitly added surfaces (the polygon barrel
 /// faces, or a single endcap disc). A TryAll policy (portals plus all passive
@@ -1172,11 +1225,14 @@ namespace CLD_o2_v07 {
 
 namespace IDEA_o1_v04 {
   void populateBlueprint(const std::string& detName, Acts::Blueprint& root,
-                         [[maybe_unused]] ActsPlugins::DD4hep::BlueprintBuilder& builder,
+                         ActsPlugins::DD4hep::BlueprintBuilder& builder,
                          [[maybe_unused]] const IActsGeoSvc::CaloFaceSurfaces& calo) {
     // Build the tracker detectors as radial children of the supplied
     // container.
-    auto buildTrackers = [&](ContainerBlueprintNode& outer) { Blueprints::addCylindricalBeampipe(outer); };
+    auto buildTrackers = [&](ContainerBlueprintNode& outer) {
+      Blueprints::addCylindricalBeampipe(outer);
+      outer.addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
+    };
 
     // The calo faces are not usable for IDEA yet: DRcalo is a single
     // DetElement flagged both BARREL and ENDCAP, without a polygon symmetry
