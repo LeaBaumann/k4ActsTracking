@@ -1283,6 +1283,11 @@ namespace IDEA_o1_v04 {
     auto buildTrackers = [&](ContainerBlueprintNode& outer) {
       Blueprints::addCylindricalBeampipe(outer);
       outer.addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
+      // Silicon wrapper barrel: two double layers, each layer its own
+      // DetElement (layer_10 and up are passive supports). The two layers of a
+      // double layer are only 2 mm apart, hence the tight envelope.
+      outer.addChild(Blueprints::makeGroupedBarrel(builder, "SiWrB", std::regex{"layer_[01]_[12]"}, "XYZ",
+                                                   Blueprints::kTightBarrelEnvelope));
     };
 
     // The calo faces are not usable for IDEA yet: DRcalo is a single
