@@ -217,23 +217,31 @@ struct NestedInnerTrackerSpec {
   Layout layout = Layout::Grouped;
 };
 
-/// A simple struct to hold configuration to build a vertex detector whose
-/// outermost barrel layer reaches the endcap disks in z, but sits radially
-/// outside of them, so that it has to enclose the disks as a separate shell.
+/// Barrel layers selected by @c filter inside the DetElement @c container
+struct BarrelPart {
+  std::string container; ///< Name of the DetElement containing the barrel layers
+  std::regex filter;     ///< The layer pattern to filter the barrel layers
+};
+
+/// A simple struct to hold configuration to build a tracker whose outermost
+/// barrel reaches the endcaps in z, but sits radially outside of them, so
+/// that it has to enclose the endcaps (and whatever sits between them) as a
+/// separate shell.
+struct ShellTrackerSpec {
+  BarrelPart shellBarrel;                                ///< Barrel layer(s) enclosing the endcaps
+  AxisDefinition barrelAxes;                             ///< The axes directions for the barrel sensors
+  Acts::ExtentEnvelope barrelEnvelope = kBarrelEnvelope; ///< Envelope of the shell barrel layers
+  std::string endcapContainer;                           ///< Name of the DetElement containing both endcap sides
+  std::string endcapPosSide; ///< Name of the positive side DetElement inside @c endcapContainer
+  std::string endcapNegSide; ///< Name of the negative side DetElement inside @c endcapContainer
+  std::regex endcapFilter;   ///< The layer pattern to filter the endcap layers of one side
+  AxisDefinition endcapAxes; ///< The axes directions for the endcap sensors
+};
+
+/// A shell tracker whose central node is made of barrel layers
 struct ShellVertexSpec {
-  /// Barrel layers selected by @c filter inside the DetElement @c container
-  struct BarrelPart {
-    std::string container; ///< Name of the DetElement containing the barrel layers
-    std::regex filter;     ///< The layer pattern to filter the barrel layers
-  };
   std::vector<BarrelPart> centralBarrel; ///< Barrel layers that end in z before the first disk
-  BarrelPart shellBarrel;                ///< Barrel layer(s) enclosing the disks
-  AxisDefinition barrelAxes;             ///< The axes directions for the barrel sensors
-  std::string endcapContainer;           ///< Name of the DetElement containing both endcap sides
-  std::string endcapPosSide;             ///< Name of the positive side DetElement inside @c endcapContainer
-  std::string endcapNegSide;             ///< Name of the negative side DetElement inside @c endcapContainer
-  std::regex endcapFilter;               ///< The layer pattern to filter the endcap layers of one side
-  AxisDefinition endcapAxes;             ///< The axes directions for the endcap sensors
+  ShellTrackerSpec shell;                ///< Shell barrel and endcaps; its barrelAxes apply to all barrel layers
 };
 
 /// The IDEA/ALLEGRO vertex detector (VertexComplete_o1_v04 in k4geo). Its
@@ -244,9 +252,29 @@ struct ShellVertexSpec {
 const auto IDEAVertexSpec = ShellVertexSpec{
     .centralBarrel = {{"VertexInnerBarrel", std::regex{"layer_\\d+_\\d+"}},
                       {"VertexOuterBarrel", std::regex{"layer_3_1"}}},
-    .shellBarrel = {"VertexOuterBarrel", std::regex{"layer_4_1"}},
+    .shell =
+        {
+            .shellBarrel = {"VertexOuterBarrel", std::regex{"layer_4_1"}},
+            .barrelAxes = "XYZ",
+            .endcapContainer = "VertexDisks",
+            .endcapPosSide = "side1",
+            .endcapNegSide = "side-1",
+            .endcapFilter = std::regex{"layer\\d+"},
+            .endcapAxes = "XYZ",
+        },
+};
+
+/// The IDEA/ALLEGRO silicon wrapper (SiliconWrapper_o1_v02 in k4geo). The
+/// barrel encloses the disks, which sit in z next to the drift chamber. Each
+/// layer of the two barrel double layers is its own DetElement (layer_10 and
+/// up are passive supports); the two layers of a double layer are only 2 mm
+/// apart, hence the tight envelope. The disk layers are named the same on
+/// both sides.
+const auto IDEASiliconWrapperSpec = ShellTrackerSpec{
+    .shellBarrel = {"SiWrB", std::regex{"layer_[01]_[12]"}},
     .barrelAxes = "XYZ",
-    .endcapContainer = "VertexDisks",
+    .barrelEnvelope = kTightBarrelEnvelope,
+    .endcapContainer = "SiWrD",
     .endcapPosSide = "side1",
     .endcapNegSide = "side-1",
     .endcapFilter = std::regex{"layer\\d+"},
@@ -883,11 +911,44 @@ makeNestedInnerTracker(ActsPlugins::DD4hep::BlueprintBuilder& builder,
   return innerTracker;
 }
 
+/// Make a tracker whose outermost barrel encloses the endcaps.
+///
+/// @p centralNode is placed between the two endcap sides along z. The shell
+/// barrel is then stacked radially around that z-stack.
+///
+/// @param builder     The Blueprint builder that drives the construction
+/// @param spec        Configuration spec
+/// @param centralNode The node between the endcap sides, e.g. inner barrel
+///                    layers or a drift chamber
+/// @param name        Name of the resulting container node
+///
+/// @returns The tracker blueprint node
+std::shared_ptr<CylinderContainerBlueprintNode> makeShellTracker(ActsPlugins::DD4hep::BlueprintBuilder& builder,
+                                                                 const ShellTrackerSpec& spec,
+                                                                 std::shared_ptr<BlueprintNode> centralNode,
+                                                                 const std::string& name) {
+  auto tracker = std::make_shared<CylinderContainerBlueprintNode>(name, AxisR);
+  tracker->setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+
+  tracker->addCylinderContainer(name + "Central", AxisZ, [&](auto& central) {
+    central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapNegSide, spec.endcapFilter,
+                                        spec.endcapAxes, kVertexEndcapEnvelope);
+    central.addChild(std::move(centralNode));
+    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapPosSide, spec.endcapFilter,
+                                        spec.endcapAxes, kVertexEndcapEnvelope);
+  });
+
+  tracker->addChild(makeGroupedBarrel(builder, spec.shellBarrel.container, spec.shellBarrel.filter, spec.barrelAxes,
+                                      spec.barrelEnvelope));
+  return tracker;
+}
+
 /// Make a vertex detector whose outermost barrel layer encloses the disks.
 ///
 /// The central barrel layers, possibly taken from several DetElements, are
-/// stacked along r and placed between the two endcap sides along z. The shell
-/// layer is then stacked radially around that z-stack.
+/// stacked along r and placed between the two endcap sides along z (see
+/// @c makeShellTracker).
 ///
 /// @param builder The Blueprint builder that drives the construction
 /// @param spec    Configuration spec
@@ -897,26 +958,12 @@ makeNestedInnerTracker(ActsPlugins::DD4hep::BlueprintBuilder& builder,
 std::shared_ptr<CylinderContainerBlueprintNode> makeShellVertex(ActsPlugins::DD4hep::BlueprintBuilder& builder,
                                                                 const ShellVertexSpec& spec,
                                                                 const std::string& name = "Vertex") {
-  auto vertex = std::make_shared<CylinderContainerBlueprintNode>(name, AxisR);
-  vertex->setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-
-  vertex->addCylinderContainer(name + "Central", AxisZ, [&](auto& central) {
-    central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapNegSide, spec.endcapFilter,
-                                        spec.endcapAxes, kVertexEndcapEnvelope);
-    central.addCylinderContainer(name + "CentralBarrel", AxisR, [&](auto& barrel) {
-      barrel.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-      for (const auto& part : spec.centralBarrel) {
-        barrel.addChild(makeGroupedBarrel(builder, part.container, part.filter, spec.barrelAxes, kBarrelEnvelope));
-      }
-    });
-    addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapPosSide, spec.endcapFilter,
-                                        spec.endcapAxes, kVertexEndcapEnvelope);
-  });
-
-  vertex->addChild(makeGroupedBarrel(builder, spec.shellBarrel.container, spec.shellBarrel.filter, spec.barrelAxes,
-                                     kBarrelEnvelope));
-  return vertex;
+  auto barrel = std::make_shared<CylinderContainerBlueprintNode>(name + "CentralBarrel", AxisR);
+  barrel->setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+  for (const auto& part : spec.centralBarrel) {
+    barrel->addChild(makeGroupedBarrel(builder, part.container, part.filter, spec.shell.barrelAxes, kBarrelEnvelope));
+  }
+  return makeShellTracker(builder, spec.shell, std::move(barrel), name);
 }
 
 /// Navigation policy factory for the passive calo volumes. Each calo volume
@@ -1283,23 +1330,11 @@ namespace IDEA_o1_v04 {
     auto buildTrackers = [&](ContainerBlueprintNode& outer) {
       Blueprints::addCylindricalBeampipe(outer);
       outer.addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
-      // Silicon wrapper: the disks sit in z next to the (not yet added) drift
-      // chamber, the barrel encloses them radially.
-      outer.addCylinderContainer("SiliconWrapper", AxisR, [&](auto& siwr) {
-        siwr.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-        siwr.addCylinderContainer("SiliconWrapperCentral", AxisZ, [&](auto& central) {
-          central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
-          for (const auto* side : {"side-1", "side1"}) {
-            Blueprints::addGroupedEndcapSideFromSideElement(builder, central, "SiWrD", side, std::regex{"layer\\d+"},
-                                                            "XYZ", Blueprints::kVertexEndcapEnvelope);
-          }
-        });
-        // Barrel: two double layers, each layer its own DetElement (layer_10
-        // and up are passive supports). The two layers of a double layer are
-        // only 2 mm apart, hence the tight envelope.
-        siwr.addChild(Blueprints::makeGroupedBarrel(builder, "SiWrB", std::regex{"layer_[01]_[12]"}, "XYZ",
-                                                    Blueprints::kTightBarrelEnvelope));
-      });
+      // The drift chamber sits between the silicon wrapper disks. For now it
+      // is a single passive placeholder volume (its gas envelope).
+      auto driftChamber = builder.makePassiveElement(builder.findDetElementByName("DCH_v2").value());
+      outer.addChild(Blueprints::makeShellTracker(builder, Blueprints::IDEASiliconWrapperSpec, std::move(driftChamber),
+                                                  "SiliconWrapper"));
     };
 
     // The calo faces are not usable for IDEA yet: DRcalo is a single
