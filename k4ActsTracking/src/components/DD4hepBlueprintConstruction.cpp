@@ -236,6 +236,7 @@ struct ShellTrackerSpec {
   std::string endcapNegSide; ///< Name of the negative side DetElement inside @c endcapContainer
   std::regex endcapFilter;   ///< The layer pattern to filter the endcap layers of one side
   AxisDefinition endcapAxes; ///< The axes directions for the endcap sensors
+  Acts::ExtentEnvelope endcapEnvelope = kVertexEndcapEnvelope; ///< Envelope of the endcap layers
 };
 
 /// A shell tracker whose central node is made of barrel layers
@@ -268,17 +269,38 @@ const auto IDEAVertexSpec = ShellVertexSpec{
 /// barrel encloses the disks, which sit in z next to the drift chamber. Each
 /// layer of the two barrel double layers is its own DetElement (layer_10 and
 /// up are passive supports); the two layers of a double layer are only 2 mm
-/// apart, hence the tight envelope. The disk layers are named the same on
-/// both sides.
+/// apart, hence the tight radial envelope. The barrel sensors end at
+/// |z| = 2400 mm, only 2.6 mm before the preshower endcaps, hence also the
+/// short envelope in z. The disk layers are named the same on both sides.
 const auto IDEASiliconWrapperSpec = ShellTrackerSpec{
     .shellBarrel = {"SiWrB", std::regex{"layer_[01]_[12]"}},
     .barrelAxes = "XYZ",
-    .barrelEnvelope = kTightBarrelEnvelope,
+    .barrelEnvelope = Acts::ExtentEnvelope{}.set(AxisZ, {1_mm, 1_mm}).set(AxisR, {0.4_mm, 0.4_mm}),
     .endcapContainer = "SiWrD",
     .endcapPosSide = "side1",
     .endcapNegSide = "side-1",
     .endcapFilter = std::regex{"layer\\d+"},
     .endcapAxes = "XYZ",
+};
+
+/// The IDEA preshower (muonSystemMuRWELL_o1_v01 in k4geo), one layer of
+/// µ-RWELL chambers in the barrel and in each endcap; the gas slice of each
+/// chamber is the sensor. Barrel and endcaps are both 32-gons with an inner
+/// apothem of 2420 mm and overlap in z, so the endcap polygon sits just
+/// inside the barrel polygon. Cylindrical volumes cannot follow that: the
+/// endcap corners reach r = 2431 mm, while the barrel chambers start at
+/// r = 2423 mm in the middle of each side. The endcap volumes are therefore
+/// cut at r = 2421 mm by a negative outer envelope; the 32 corner tips of the
+/// endcap chambers stick out into the barrel volume.
+const auto IDEAPreshowerSpec = ShellTrackerSpec{
+    .shellBarrel = {"Preshower-BarrelDE", std::regex{"Preshower-Barrel_DetectorLayerDE_\\d+"}},
+    .barrelAxes = "YZX",
+    .endcapContainer = "Preshower",
+    .endcapPosSide = "PreshowerEndcapDE_1",
+    .endcapNegSide = "PreshowerEndcapDE_-1",
+    .endcapFilter = std::regex{"Preshower-EndcapDetectorLayer\\d+DE"},
+    .endcapAxes = "YZX",
+    .endcapEnvelope = Acts::ExtentEnvelope{}.set(AxisZ, {1_mm, 1_mm}).set(AxisR, {1_mm, -10_mm}),
 };
 
 const auto UngroupedNestedInnerTrackerSpec = NestedInnerTrackerSpec{
@@ -933,10 +955,10 @@ std::shared_ptr<CylinderContainerBlueprintNode> makeShellTracker(ActsPlugins::DD
   tracker->addCylinderContainer(name + "Central", AxisZ, [&](auto& central) {
     central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
     addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapNegSide, spec.endcapFilter,
-                                        spec.endcapAxes, kVertexEndcapEnvelope);
+                                        spec.endcapAxes, spec.endcapEnvelope);
     central.addChild(std::move(centralNode));
     addGroupedEndcapSideFromSideElement(builder, central, spec.endcapContainer, spec.endcapPosSide, spec.endcapFilter,
-                                        spec.endcapAxes, kVertexEndcapEnvelope);
+                                        spec.endcapAxes, spec.endcapEnvelope);
   });
 
   tracker->addChild(makeGroupedBarrel(builder, spec.shellBarrel.container, spec.shellBarrel.filter, spec.barrelAxes,
@@ -1328,13 +1350,20 @@ namespace IDEA_o1_v04 {
     // Build the tracker detectors as radial children of the supplied
     // container.
     auto buildTrackers = [&](ContainerBlueprintNode& outer) {
+      // The beampipe reaches down to r = 0, so it cannot share a z-stack with
+      // the preshower endcaps and stays outside the preshower shell.
       Blueprints::addCylindricalBeampipe(outer);
-      outer.addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
+      auto inner = std::make_shared<CylinderContainerBlueprintNode>("InnerTrackers", AxisR);
+      inner->addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
       // The drift chamber sits between the silicon wrapper disks. For now it
       // is a single passive placeholder volume (its gas envelope).
       auto driftChamber = builder.makePassiveElement(builder.findDetElementByName("DCH_v2").value());
-      outer.addChild(Blueprints::makeShellTracker(builder, Blueprints::IDEASiliconWrapperSpec, std::move(driftChamber),
-                                                  "SiliconWrapper"));
+      inner->addChild(Blueprints::makeShellTracker(builder, Blueprints::IDEASiliconWrapperSpec,
+                                                   std::move(driftChamber), "SiliconWrapper"));
+      // The preshower barrel encloses everything above, with the preshower
+      // endcaps on either side of it in z.
+      outer.addChild(
+          Blueprints::makeShellTracker(builder, Blueprints::IDEAPreshowerSpec, std::move(inner), "Preshower"));
     };
 
     // The calo faces are not usable for IDEA yet: DRcalo is a single
