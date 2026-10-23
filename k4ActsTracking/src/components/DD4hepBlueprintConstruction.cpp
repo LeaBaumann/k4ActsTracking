@@ -1283,11 +1283,23 @@ namespace IDEA_o1_v04 {
     auto buildTrackers = [&](ContainerBlueprintNode& outer) {
       Blueprints::addCylindricalBeampipe(outer);
       outer.addChild(Blueprints::makeShellVertex(builder, Blueprints::IDEAVertexSpec));
-      // Silicon wrapper barrel: two double layers, each layer its own
-      // DetElement (layer_10 and up are passive supports). The two layers of a
-      // double layer are only 2 mm apart, hence the tight envelope.
-      outer.addChild(Blueprints::makeGroupedBarrel(builder, "SiWrB", std::regex{"layer_[01]_[12]"}, "XYZ",
-                                                   Blueprints::kTightBarrelEnvelope));
+      // Silicon wrapper: the disks sit in z next to the (not yet added) drift
+      // chamber, the barrel encloses them radially.
+      outer.addCylinderContainer("SiliconWrapper", AxisR, [&](auto& siwr) {
+        siwr.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+        siwr.addCylinderContainer("SiliconWrapperCentral", AxisZ, [&](auto& central) {
+          central.setAttachmentStrategy(Acts::VolumeAttachmentStrategy::First);
+          for (const auto* side : {"side-1", "side1"}) {
+            Blueprints::addGroupedEndcapSideFromSideElement(builder, central, "SiWrD", side, std::regex{"layer\\d+"},
+                                                            "XYZ", Blueprints::kVertexEndcapEnvelope);
+          }
+        });
+        // Barrel: two double layers, each layer its own DetElement (layer_10
+        // and up are passive supports). The two layers of a double layer are
+        // only 2 mm apart, hence the tight envelope.
+        siwr.addChild(Blueprints::makeGroupedBarrel(builder, "SiWrB", std::regex{"layer_[01]_[12]"}, "XYZ",
+                                                    Blueprints::kTightBarrelEnvelope));
+      });
     };
 
     // The calo faces are not usable for IDEA yet: DRcalo is a single
